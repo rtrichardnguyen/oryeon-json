@@ -38,26 +38,9 @@ def main():
             record_info = {}
             answer = dns.resolver.resolve(domain, record)
 
-            match record:
-                case 'A' | 'AAAA':
-
-                    for i, rdata in enumerate(answer):
-                        record_info[i] = str(rdata)
-
-                case 'CNAME':
-
-                    for i, rdata in enumerate(answer):
-                        record_info[i] = rdata.to_text()
-
-                case 'MX':
-                    pass
-                case 'NS':
-                    pass
-                case 'TXT':
-                    pass
-                case 'SOA':
-                    pass
-
+            for i, rdata in enumerate(answer):
+                record_info[i] = rdata.to_text()
+        
         except dns.resolver.LifetimeTimeout:
             print(f"LifetimeTimeout ERROR '{record}': Timeout while resolving DNS data.")
 
