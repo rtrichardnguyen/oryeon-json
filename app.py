@@ -36,16 +36,19 @@ def main():
 
         try:
             record_info = {}
-            answers = dns.resolver.resolve(domain, record)
+            answer = dns.resolver.resolve(domain, record)
 
             match record:
                 case 'A' | 'AAAA':
 
-                    for i, rdata in enumerate(answers):
+                    for i, rdata in enumerate(answer):
                         record_info[i] = str(rdata)
 
                 case 'CNAME':
-                    pass
+
+                    for i, rdata in enumerate(answer):
+                        record_info[i] = rdata.to_text()
+
                 case 'MX':
                     pass
                 case 'NS':
@@ -56,19 +59,19 @@ def main():
                     pass
 
         except dns.resolver.LifetimeTimeout:
-            print(f"DNS ERROR for record '{record}': Timeout while resolving DNS data.")
+            print(f"LifetimeTimeout ERROR '{record}': Timeout while resolving DNS data.")
 
         except dns.resolver.NXDOMAIN:
-            print(f"DNS ERROR for record '{record}': Query name does not exist.")
+            print(f"NXDOMAIN ERROR '{record}': Query name does not exist.")
 
         except dns.resolver.YXDOMAIN:
-            print(f"DNS ERROR for record '{record}': Query name is too long after DNAME substitution.")
+            print(f"YXDOMAIN ERROR '{record}': Query name is too long after DNAME substitution.")
 
         except dns.resolver.NoAnswer:
-            print(f"DNS ERROR for record '{record}': raise_on_no_answer is True and the query name exists but has no RRset of the desired type and class.")
+            print(f"NoAnswer ERROR '{record}': raise_on_no_answer is True and the query name exists but has no RRset of the desired type and class.")
 
         except dns.resolver.NoNameservers:
-            print(f"DNS ERROR for record '{record}': No non-broken nameservers are available to resolve the DNS data.")
+            print(f"NoNameservers ERROR '{record}': No non-broken nameservers are available to resolve the DNS data.")
 
         finally:
             result_json['dns'][record] = None if not record_info else record_info
