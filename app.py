@@ -39,7 +39,7 @@ def main():
             answer = dns.resolver.resolve(domain, record)
 
             match record:
-                case 'A' | 'AAAA':
+                case 'A' | 'AAAA' | 'TXT':
 
                     for i, rdata in enumerate(answer):
                         record_info[i] = rdata.to_text()
@@ -79,9 +79,7 @@ def main():
 
                         ip_dict['related_ips'] = related_ips
                         record_info[nameserver] = ip_dict
-
-                case 'TXT':
-                    pass
+    
                 case 'SOA':
                     pass
         
