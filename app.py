@@ -43,12 +43,43 @@ def main():
 
                     for i, rdata in enumerate(answer):
                         record_info[i] = rdata.to_text()
+
                 case 'CNAME':
                     pass
                 case 'MX':
                     pass
                 case 'NS':
-                    pass
+
+                    for i, rdata in enumerate(answer):
+                        #rdata.address for ip | answer.rrset.ttl for ttl
+                        ip_dict = {}
+                        related_ips = {}
+
+                        nameserver = rdata.to_text()
+
+                        ip_answer_A = dns.resolver.resolve(nameserver, "A")
+                        ip_answer_AAAA = dns.resolver.resolve(nameserver, "AAAA")
+
+                        ip_index = 0
+
+                        for rdata_A in ip_answer_A:
+                            ttl = str(ip_answer_A.ttl)
+                            value = str(rdata_A.address)
+
+                            related_ips[ip_index] = {'ttl': ttl, 'value': value}
+                            ip_index += 1
+
+                        for rdata_AAAA in ip_answer_AAAA:
+                            ttl = str(ip_answer_AAAA.ttl)
+                            value = str(rdata_AAAA.address)
+
+                            related_ips[ip_index] = {'ttl': ttl, 'value': value}
+                            ip_index += 1
+
+
+                        ip_dict['related_ips'] = related_ips
+                        record_info[nameserver] = ip_dict
+
                 case 'TXT':
                     pass
                 case 'SOA':
