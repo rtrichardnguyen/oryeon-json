@@ -39,13 +39,39 @@ def main():
             answer = dns.resolver.resolve(domain, record)
 
             match record:
+
                 case 'A' | 'AAAA':
 
                     for i, rdata in enumerate(answer):
                         record_info[i] = rdata.to_text()
 
                 case 'CNAME':
-                    pass
+
+                    related_ips = []
+
+                    cname_rdata = answer[0].to_text()
+
+                    record_info["value"] = cname_rdata
+                    cname_answer_A = dns.resolver.resolve(cname_rdata, "A")
+                    cname_answer_AAAA = dns.resolver.resolve(cname_rdata, "AAAA")
+
+                    for rdata_A in (cname_answer_A):
+                        ttl = str(cname_answer_A.ttl)
+                        value = str(rdata_A.address)
+
+                        related_ips.append({'ttl': ttl, 'value': value})
+
+                    record_info["related_ips"] = related_ips
+
+                    for rdata_AAAA in (cname_answer_AAAA):
+                        ttl = str(cname_answer_AAAA.ttl)
+                        value = str(rdata_AAAA.address)
+
+                        related_ips.append({'ttl': ttl, 'value': value})
+
+                    record_info["related_ips"] = related_ips
+
+                       
                 case 'MX':
                     pass
                 case 'NS':
@@ -53,29 +79,26 @@ def main():
                     for i, rdata in enumerate(answer):
                         #rdata.address for ip | answer.rrset.ttl for ttl
                         ip_dict = {}
-                        related_ips = {}
+                        related_ips = []
 
                         nameserver = rdata.to_text()
 
                         ip_answer_A = dns.resolver.resolve(nameserver, "A")
                         ip_answer_AAAA = dns.resolver.resolve(nameserver, "AAAA")
 
-                        ip_index = 0
-
                         for rdata_A in ip_answer_A:
+
                             ttl = str(ip_answer_A.ttl)
                             value = str(rdata_A.address)
 
-                            related_ips[ip_index] = {'ttl': ttl, 'value': value}
-                            ip_index += 1
+                            related_ips.append({'ttl': ttl, 'value': value})
 
                         for rdata_AAAA in ip_answer_AAAA:
+
                             ttl = str(ip_answer_AAAA.ttl)
                             value = str(rdata_AAAA.address)
 
-                            related_ips[ip_index] = {'ttl': ttl, 'value': value}
-                            ip_index += 1
-
+                            related_ips.append({'ttl': ttl, 'value': value})
 
                         ip_dict['related_ips'] = related_ips
                         record_info[nameserver] = ip_dict
