@@ -3,10 +3,63 @@ import dns.resolver
 import dns.name
 from urllib.parse import urlparse
 import json
+import re
 
 
 
 DNS_RECORDS = ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'TXT', 'SOA']
+
+SOA_RE = re.compile(
+    r'^\s*'
+    r'(?P<primary_ns>\S+)\s+'
+    r'(?P<resp_mailbox>\S+)\s+'
+    r'(?P<serial>\d+)\s+'
+    r'(?P<refresh>\d+)\s+'
+    r'(?P<retry>\d+)\s+'
+    r'(?P<expire>\d+)\s+'
+    r'(?P<min_ttl>\d+)'
+    r'\s*$'
+)
+
+def _resolve_ips(domain: str) -> list[dict]:
+    
+    related_ips = []
+
+    answer_A = dns.resolver.resolve(domain, "A")
+    answer_AAAA = dns.resolver.resolve(domain, "AAAA")
+
+    for rdata_A in answer_A:
+        ttl = str(answer_A.ttl)
+        value = str(rdata_A.address)
+
+        related_ips.append({'ttl': ttl, 'value': value})
+
+    for rdata_AAAA in answer_AAAA:
+        ttl = str(answer_AAAA.ttl)
+        value = str(rdata_AAAA.address)
+
+        related_ips.append({'ttl': ttl, 'value': value})
+
+    return related_ips
+
+
+def get_zone_soa(domain: str):
+    name = dns.name.from_text(domain)
+
+    while True:
+        try:
+            # try current name
+            answer = dns.resolver.resolve(name.to_text(), "SOA")
+            return answer[0]      # SOA rdata
+        except (dns.resolver.NoAnswer,
+                dns.resolver.NXDOMAIN,
+                dns.resolver.LifetimeTimeout):
+            # move one level up
+            try:
+                name = name.parent()
+            except dns.name.NoParent:
+                # we hit the root and never found an SOA
+                return None
 
 def main():
 
@@ -34,6 +87,8 @@ def main():
 
     for record in DNS_RECORDS:
 
+
+
         try:
             record_info = {}
             answer = dns.resolver.resolve(domain, record)
@@ -42,71 +97,58 @@ def main():
 
                 case 'A' | 'AAAA':
 
-                    for i, rdata in enumerate(answer):
-                        record_info[i] = rdata.to_text()
+                    ips = []
+
+                    for rdata in answer:
+                        ips.append(rdata.to_text())
+
+                    record_info[record] = ips
 
                 case 'CNAME':
-
-                    related_ips = []
 
                     cname_rdata = answer[0].to_text()
 
                     record_info["value"] = cname_rdata
-                    cname_answer_A = dns.resolver.resolve(cname_rdata, "A")
-                    cname_answer_AAAA = dns.resolver.resolve(cname_rdata, "AAAA")
-
-                    for rdata_A in (cname_answer_A):
-                        ttl = str(cname_answer_A.ttl)
-                        value = str(rdata_A.address)
-
-                        related_ips.append({'ttl': ttl, 'value': value})
-
-                    record_info["related_ips"] = related_ips
-
-                    for rdata_AAAA in (cname_answer_AAAA):
-                        ttl = str(cname_answer_AAAA.ttl)
-                        value = str(rdata_AAAA.address)
-
-                        related_ips.append({'ttl': ttl, 'value': value})
-
-                    record_info["related_ips"] = related_ips
+                    record_info["related_ips"] = _resolve_ips(cname_rdata)
 
                        
                 case 'MX':
-                    pass
+
+                    for rdata in answer:
+                        pattern = r'^(\d+)\s+([A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+\.?$)'
+                        match = re.match(pattern, rdata.to_text())
+
+                        mx_info = {'priority': match.group(1)}
+
+                        mx_info['related_ips'] = _resolve_ips(match.group(2))
+
+                        record_info[match.group(2)] = mx_info
+
                 case 'NS':
 
                     for i, rdata in enumerate(answer):
-                        #rdata.address for ip | answer.rrset.ttl for ttl
+
                         ip_dict = {}
-                        related_ips = []
 
                         nameserver = rdata.to_text()
 
-                        ip_answer_A = dns.resolver.resolve(nameserver, "A")
-                        ip_answer_AAAA = dns.resolver.resolve(nameserver, "AAAA")
-
-                        for rdata_A in ip_answer_A:
-
-                            ttl = str(ip_answer_A.ttl)
-                            value = str(rdata_A.address)
-
-                            related_ips.append({'ttl': ttl, 'value': value})
-
-                        for rdata_AAAA in ip_answer_AAAA:
-
-                            ttl = str(ip_answer_AAAA.ttl)
-                            value = str(rdata_AAAA.address)
-
-                            related_ips.append({'ttl': ttl, 'value': value})
-
-                        ip_dict['related_ips'] = related_ips
+                        ip_dict['related_ips'] = _resolve_ips(nameserver)
                         record_info[nameserver] = ip_dict
 
                 case 'TXT':
-                    pass
+
+                    txts = []
+
+                    for rdata in answer:
+                        txts.append(rdata.to_text().strip('\\"'))
+
+                    record_info = txts
+
                 case 'SOA':
-                    pass
+
+                    soa_dict = SOA_RE.match(answer[0].to_text())
+                    record_info = soa_dict.groupdict()
+
         
         except dns.resolver.LifetimeTimeout:
             print(f"LifetimeTimeout ERROR '{record}': Timeout while resolving DNS data.")
@@ -118,16 +160,25 @@ def main():
             print(f"YXDOMAIN ERROR '{record}': Query name is too long after DNAME substitution.")
 
         except dns.resolver.NoAnswer:
-            print(f"NoAnswer ERROR '{record}': raise_on_no_answer is True and the query name exists but has no RRset of the desired type and class.")
+            print(f"NoAnswer ERROR '{record}': No answer was found for this record.")
 
         except dns.resolver.NoNameservers:
             print(f"NoNameservers ERROR '{record}': No non-broken nameservers are available to resolve the DNS data.")
 
         finally:
             result_json['dns'][record] = None if not record_info else record_info
-    
-    print(json.dumps(result_json, indent=4))
+ 
 
+    zone_soa_rdata = get_zone_soa(domain)
+    if zone_soa_rdata is not None:
+        m = SOA_RE.match(zone_soa_rdata.to_text())
+        result_json['dns']['zone_SOA'] = m.groupdict() if m else None
+    else:
+        result_json['dns']['zone_SOA'] = None
+
+
+    with open('output.json', 'w') as f:
+        json.dump(result_json, f, indent=4)
 
 if __name__ == "__main__":
     main()
