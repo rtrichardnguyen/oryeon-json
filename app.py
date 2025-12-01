@@ -1,10 +1,7 @@
-import sys
+import sys, json, re, ssl, socket
 import dns.resolver
 import dns.name
 from urllib.parse import urlparse
-import json
-import re
-
 
 
 DNS_RECORDS = ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'TXT', 'SOA']
@@ -61,6 +58,28 @@ def get_zone_soa(domain: str):
                 # we hit the root and never found an SOA
                 return None
 
+
+def get_tls_data(parsed_url: str):
+
+    tls_map = {}
+
+    hostname = parsed_url.hostname
+    port = parsed_url.port or 443
+
+    context = ssl.create_default_context()
+
+    with socket.create_connection((hostname, port)) as sock:
+
+        with context.wrap_socket(sock, server_hostname=hostname) as ssock:
+            cipher_suite, tls_protocol, secret_bits = ssock.cipher()
+            certificates = ssock.getpeercertchain()
+
+    tls_map['cipher'] = cipher_suite
+    tls_map['count'] = 1 # Only one TLS connection attempt
+    tls_map['protocol'] = tls_protocol
+
+    print(certificates)
+
 def main():
 
     if len(sys.argv)!= 2:
@@ -70,7 +89,8 @@ def main():
     result_json = {}
 
     url = sys.argv[1]
-    domain = urlparse(url).netloc
+    parsed_url = urlparse(url)
+    domain = parsed_url.netloc
 
     if not domain:
         raise ValueError('Incorrect URL value was given.')
@@ -176,6 +196,14 @@ def main():
     else:
         result_json['dns']['zone_SOA'] = None
 
+    # TODO: dnssec
+    # TODO: ttls
+    # TODO: remarks
+
+
+
+    """ TLS DATA """
+    print(get_tls_data(parsed_url))
 
     with open('output.json', 'w') as f:
         json.dump(result_json, f, indent=4)
