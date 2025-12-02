@@ -1,8 +1,9 @@
-import sys, json, re, ssl, socket
+import sys, json, re, ssl, socket, whoisit
 import dns.resolver
 import dns.name
 from urllib.parse import urlparse
-
+from ipwhois import IPWhois
+from datetime import datetime
 
 DNS_RECORDS = ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'TXT', 'SOA']
 
@@ -72,13 +73,24 @@ def get_tls_data(parsed_url: str):
 
         with context.wrap_socket(sock, server_hostname=hostname) as ssock:
             cipher_suite, tls_protocol, secret_bits = ssock.cipher()
-            certificates = ssock.getpeercertchain()
+            certificates = ssock.getpeercert()
 
     tls_map['cipher'] = cipher_suite
     tls_map['count'] = 1 # Only one TLS connection attempt
     tls_map['protocol'] = tls_protocol
 
-    print(certificates)
+def _get_rdap(domain: str) -> dict:
+
+    whoisit.bootstrap() 
+    result = whoisit.domain(domain)
+
+    return result 
+
+def _encode(obj):
+
+    if isinstance(obj, datetime):
+        return obj.isoformat() + 'Z'
+    raise TypeError(f"Another json encoding error")
 
 def main():
 
@@ -201,12 +213,14 @@ def main():
     # TODO: remarks
 
 
+    """ RDP DATA """
+
+    result_json['rdap'] = _get_rdap(domain)
 
     """ TLS DATA """
-    print(get_tls_data(parsed_url))
 
     with open('output.json', 'w') as f:
-        json.dump(result_json, f, indent=4)
+        json.dump(result_json, f, indent=4, default=_encode)
 
 if __name__ == "__main__":
     main()

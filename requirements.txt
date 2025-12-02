@@ -1,2 +1,4 @@
 urllib3
 dnspython
+whoisit
+ipwhois
