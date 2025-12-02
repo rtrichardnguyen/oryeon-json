@@ -81,16 +81,29 @@ def get_tls_data(parsed_url: str):
 
 def _get_rdap(domain: str) -> dict:
 
-    whoisit.bootstrap() 
-    result = whoisit.domain(domain)
+    return whoisit.domain(domain)
 
-    return result 
+def _get_ip_data_rdap(ip: str) -> dict:
+
+    return whoisit.ip(ip)
+
+def _get_ip_data(ip: str, record: str) -> dict:
+    
+    ip_data_dict = {}
+    
+    ip_data_dict['ip'] = ip
+    ip_data_dict['from_record'] = record
+    # TODO: remarks
+    ip_data_dict['rdap'] = _get_ip_data_rdap(ip)
+    # TODO: asn
+    # TODO: geo
+
+    return ip_data_dict
 
 def _encode(obj):
 
     if isinstance(obj, datetime):
         return obj.isoformat() + 'Z'
-    raise TypeError(f"Another json encoding error")
 
 def main():
 
@@ -110,7 +123,7 @@ def main():
     result_json['url'] = url
     result_json['domain_name'] = domain 
     result_json['dns'] = {}
-    result_json['ip_data'] = {}
+    result_json['ip_data'] = []
     result_json['rdap'] = {}
     result_json['tls'] = {}
 
@@ -215,12 +228,26 @@ def main():
 
     """ RDP DATA """
 
+    whoisit.bootstrap()
     result_json['rdap'] = _get_rdap(domain)
+
 
     """ TLS DATA """
 
+
+    """ IP DATA """
+
+    for ip in result_json['dns']['A']['A']:
+        result_json['ip_data'].append(_get_ip_data(ip, 'A'))
+
+    for ip in result_json['dns']['AAAA']['AAAA']:
+        result_json['ip_data'].append(_get_ip_data(ip, 'AAAA'))
+ 
+
+    """ EPILOGUE """
     with open('output.json', 'w') as f:
         json.dump(result_json, f, indent=4, default=_encode)
+
 
 if __name__ == "__main__":
     main()
