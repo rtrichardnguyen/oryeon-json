@@ -147,7 +147,7 @@ def main():
                     for rdata in answer:
                         ips.append(rdata.to_text())
 
-                    record_info[record] = ips
+                    record_info = ips
 
                 case 'CNAME':
 
@@ -237,16 +237,16 @@ def main():
 
     """ IP DATA """
 
-    for ip in result_json['dns']['A']['A']:
+    for ip in result_json['dns']['A']:
         result_json['ip_data'].append(_get_ip_data(ip, 'A'))
 
-    for ip in result_json['dns']['AAAA']['AAAA']:
+    for ip in result_json['dns']['AAAA']:
         result_json['ip_data'].append(_get_ip_data(ip, 'AAAA'))
  
 
     """ EPILOGUE """
     with open('output.json', 'w') as f:
-        json.dump(result_json, f, indent=4, default=_encode)
+        json.dump([result_json], f, indent=4, default=_encode)
 
 
 if __name__ == "__main__":
