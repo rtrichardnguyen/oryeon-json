@@ -339,6 +339,8 @@ def main():
     remarks = {}
     remarks['has_dnskey'] = has_dnskey
 
+    result_json['dns']['remarks'] = remarks
+
     # TODO: sources
     # TODO: ttls
 
