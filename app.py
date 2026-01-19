@@ -26,6 +26,17 @@ SOA_RE = re.compile(
 ROOT = Path(__file__).resolve().parents[0]
 ZGRAB2 = ROOT / 'tools' / 'zgrab2' / 'zgrab2'
 
+RR_TYPES = ["A", "AAAA", "SOA", "CNAME", "MX", "NS", "TXT", "NAPTR"]
+
+# enums (match your schema)
+SRC_AUTH = 0
+SRC_RECURSIVE = 1
+SRC_NOT_FOUND = 2
+
+DNSSEC_NO_RRSIG = 0
+DNSSEC_OK_LOCAL = 1          # "RRSIG present" (presence-based)
+DNSSEC_BAD_SIG = 2           # we won't reliably detect this without full validation
+DNSSEC_NO_DNSKEY = 3
 
 def _resolve_ips(domain: str) -> list[dict]:
     
@@ -264,6 +275,70 @@ def main():
     # TODO: dnssec
     # TODO: ttls
     # TODO: remarks
+
+    def _resolve_rr(domain: str, rtype: str, auth_ip: str | None):
+        """
+        Returns:
+          (answer_or_None, source_enum, ttl_int, found_bool)
+        """
+        # 1) Try authoritative
+        if auth_ip:
+            try:
+                r = _resolver_for_nameserver(auth_ip)
+                ans = r.resolve(domain, rtype, raise_on_no_answer=False)
+                # If no answer section / empty rrset => treat as not found
+                if ans.rrset is None:
+                    return None, SRC_NOT_FOUND, 0, False
+                return ans, SRC_AUTH, int(ans.rrset.ttl), True
+            except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers):
+                return None, SRC_NOT_FOUND, 0, False
+            except dns.exception.DNSException:
+                # fall through to recursive
+                pass
+
+        # 2) Fallback recursive (system-configured)
+        try:
+            r = dns.resolver.Resolver()
+            r.timeout = 2.0
+            r.lifetime = 2.0
+            ans = r.resolve(domain, rtype, raise_on_no_answer=False)
+            if ans.rrset is None:
+                return None, SRC_NOT_FOUND, 0, False
+            return ans, SRC_RECURSIVE, int(ans.rrset.ttl), True
+        except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers):
+            return None, SRC_NOT_FOUND, 0, False
+        except dns.exception.DNSException:
+            return None, SRC_NOT_FOUND, 0, False
+
+    def _resolver_for_nameserver(ip: str) -> dns.resolver.Resolver:
+        r = dns.resolver.Resolver(configure=False)
+        r.nameservers = [ip]
+        r.timeout = 2.0
+        r.lifetime = 2.0
+        return r
+
+    def _get_dnskey(zone, auth_ip):
+        ans, _, _, found = _resolve_rr(zone, "DNSKEY", auth_ip)
+        return bool(found)
+
+    def _pick_authoritative_ns_ip(domain):
+
+        try:
+            ns_ans = dns.resolver.resolve(domain, 'NS')
+            ns_name = ns_ans[0].to_text().rstrip('.')
+            a_ans = dns.resolver.resolve(ns_name, 'A')
+            return a_ans[0].address
+
+        except Exception:
+            return None
+
+    zone = domain.rstrip('.')
+    auth_ip = _pick_authoritative_ns_ip(domain)
+
+    has_dnskey = _get_dnskey(zone, auth_ip)
+    remarks = {}
+    remarks['has_dnskey'] = has_dnskey
+
     # TODO: sources
     # TODO: ttls
 
@@ -272,7 +347,10 @@ def main():
     whoisit.bootstrap()
     result_json['rdap'] = _get_rdap(domain)
 
-
+    result_json['rdap']['last_changed_date'] = { '$date': result_json['rdap']['last_changed_date'] }
+    result_json['rdap']['registration_date'] = { '$date': result_json['rdap']['registration_date'] }
+    result_json['rdap']['expiration_date'] = { '$date': result_json['rdap']['expiration_date'] }
+ 
     """ TLS DATA """
 
     proc = subprocess.run(
