@@ -2,3 +2,4 @@ urllib3
 dnspython
 whoisit
 ipwhois
+cryptography

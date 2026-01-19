@@ -1,9 +1,12 @@
-import sys, json, re, ssl, socket, whoisit
+import sys, json, re, ssl, socket, whoisit, subprocess, base64
 import dns.resolver
 import dns.name
 from urllib.parse import urlparse
 from ipwhois import IPWhois
 from datetime import datetime
+from pathlib import Path
+from cryptography import x509
+from cryptography.hazmat.backends import default_backend
 
 DNS_RECORDS = ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'TXT', 'SOA']
 
@@ -18,6 +21,10 @@ SOA_RE = re.compile(
     r'(?P<min_ttl>\d+)'
     r'\s*$'
 )
+
+ROOT = Path(__file__).resolve().parents[0]
+ZGRAB2 = ROOT / 'tools' / 'zgrab2' / 'zgrab2'
+
 
 def _resolve_ips(domain: str) -> list[dict]:
     
@@ -105,6 +112,38 @@ def _encode(obj):
     if isinstance(obj, datetime):
         return obj.isoformat() + 'Z'
 
+def _normalize_certificate(ingest_certificate, is_root: bool):
+
+    normalized_cert = {}
+
+    normalized_cert['common_name'] = ingest_certificate['parsed']['issuer']['common_name'][0]
+    normalized_cert['organization'] = ingest_certificate['parsed']['issuer']['organization'][0] 
+    normalized_cert['country'] = ingest_certificate['parsed']['issuer']['country'][0] 
+    normalized_cert['validity_start'] = { '$date' : ingest_certificate['parsed']['validity']['start'] } 
+    normalized_cert['validity_end'] = { '$date' : ingest_certificate['parsed']['validity']['end'] } 
+    normalized_cert['valid_len'] = ingest_certificate['parsed']['validity']['length'] 
+
+    exts = _get_cert_exts(ingest_certificate['raw'])
+    normalized_cert['extensions'] = exts
+    normalized_cert['extension_count'] = len(exts) 
+
+    normalized_cert['is_root'] = is_root 
+
+    return normalized_cert
+
+def _get_cert_exts(cert_raw_b64):
+    der = base64.b64decode(cert_raw_b64)
+    cert = x509.load_der_x509_certificate(der, default_backend())
+
+    exts = []
+    for ext in cert.extensions:
+        exts.append({
+            'critical': ext.critical,
+            'name': ext.oid._name or ext.oid.dotted_string,
+            'value': str(ext.value),
+        })
+    return exts
+
 def main():
 
     if len(sys.argv)!= 2:
@@ -131,8 +170,6 @@ def main():
     """ DNS DATA """
 
     for record in DNS_RECORDS:
-
-
 
         try:
             record_info = {}
@@ -224,15 +261,49 @@ def main():
     # TODO: dnssec
     # TODO: ttls
     # TODO: remarks
+    # TODO: sources
+    # TODO: ttls
 
-
-    """ RDP DATA """
+    """ RDAP DATA """
 
     whoisit.bootstrap()
     result_json['rdap'] = _get_rdap(domain)
 
 
     """ TLS DATA """
+
+    proc = subprocess.run(
+        [f'echo {domain} | {str(ZGRAB2)} http --max-redirects=1 --endpoint="{url.split(domain, 1)[1]}"', 'http', '--help'],
+        capture_output=True,
+        text=True,
+        shell=True
+    )
+
+    handshake_data = proc.stdout
+    if handshake_data:
+        handshake_data = json.loads(handshake_data)
+        result_json['tls']['cipher'] = handshake_data['data']['http']['result']['response']['request']['tls_log']['handshake_log']['server_hello']['cipher_suite']['name']
+        result_json['tls']['protocol'] = handshake_data['data']['http']['result']['response']['request']['tls_log']['handshake_log']['server_hello']['supported_versions']['selected_version']['name']
+
+        certificate_data = handshake_data['data']['http']['result']['response']['request']['tls_log']['handshake_log']['server_certificates']
+        root_certificate = certificate_data['certificate']
+
+        certificates = []
+
+        for i, cert in enumerate([root_certificate] + certificate_data['chain']):
+
+            if i == 0:
+                certificates.append(_normalize_certificate(cert, True))
+            else:
+                certificates.append(_normalize_certificate(cert, False))
+
+        result_json['tls']['certificates'] = certificates
+
+        result_json['tls']['count'] = len(certificates)
+
+    else:
+        print("Could not fetch TLS data (Zgrab2 Error)") 
+        
 
 
     """ IP DATA """
