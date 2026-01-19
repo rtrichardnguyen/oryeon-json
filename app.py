@@ -1,4 +1,5 @@
 import sys, json, re, ssl, socket, whoisit, subprocess, base64
+import tldextract
 import dns.resolver
 import dns.name
 from urllib.parse import urlparse
@@ -155,6 +156,8 @@ def main():
     url = sys.argv[1]
     parsed_url = urlparse(url)
     domain = parsed_url.netloc
+    ext = tldextract.extract(parsed_url.hostname)
+    domain = ext.top_domain_under_public_suffix
 
     if not domain:
         raise ValueError('Incorrect URL value was given.')
@@ -280,38 +283,43 @@ def main():
     )
 
     handshake_data = proc.stdout
-    if handshake_data:
-        handshake_data = json.loads(handshake_data)
-        result_json['tls']['cipher'] = handshake_data['data']['http']['result']['response']['request']['tls_log']['handshake_log']['server_hello']['cipher_suite']['name']
-        result_json['tls']['protocol'] = handshake_data['data']['http']['result']['response']['request']['tls_log']['handshake_log']['server_hello']['supported_versions']['selected_version']['name']
 
-        certificate_data = handshake_data['data']['http']['result']['response']['request']['tls_log']['handshake_log']['server_certificates']
-        root_certificate = certificate_data['certificate']
+    try:
 
-        certificates = []
+        if handshake_data:
 
-        for i, cert in enumerate([root_certificate] + certificate_data['chain']):
+            handshake_data = json.loads(handshake_data)
+            result_json['tls']['cipher'] = handshake_data['data']['http']['result']['response']['request']['tls_log']['handshake_log']['server_hello']['cipher_suite']['name']
+            result_json['tls']['protocol'] = handshake_data['data']['http']['result']['response']['request']['tls_log']['handshake_log']['server_hello']['supported_versions']['selected_version']['name']
 
-            if i == 0:
-                certificates.append(_normalize_certificate(cert, True))
-            else:
-                certificates.append(_normalize_certificate(cert, False))
+            certificate_data = handshake_data['data']['http']['result']['response']['request']['tls_log']['handshake_log']['server_certificates']
+            root_certificate = certificate_data['certificate']
 
-        result_json['tls']['certificates'] = certificates
+            certificates = []
 
-        result_json['tls']['count'] = len(certificates)
+            for i, cert in enumerate([root_certificate] + certificate_data['chain']):
 
-    else:
-        print("Could not fetch TLS data (Zgrab2 Error)") 
-        
+                if i == 0:
+                    certificates.append(_normalize_certificate(cert, True))
+                else:
+                    certificates.append(_normalize_certificate(cert, False))
 
+            result_json['tls']['certificates'] = certificates
+
+            result_json['tls']['count'] = len(certificates)
+
+        else:
+            print("Could not fetch TLS data (Zgrab2 Error)") 
+            
+    except Exception as e:
+        print("NO TLS")
 
     """ IP DATA """
 
-    for ip in result_json['dns']['A']:
+    for ip in (result_json['dns'].get('A') or []):
         result_json['ip_data'].append(_get_ip_data(ip, 'A'))
 
-    for ip in result_json['dns']['AAAA']:
+    for ip in (result_json['dns'].get('AAAA') or []):
         result_json['ip_data'].append(_get_ip_data(ip, 'AAAA'))
  
 
