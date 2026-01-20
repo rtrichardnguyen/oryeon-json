@@ -392,7 +392,7 @@ def main():
             print("Could not fetch TLS data (Zgrab2 Error)") 
             
     except Exception as e:
-        print("NO TLS")
+        print(e)
 
     """ IP DATA """
 
