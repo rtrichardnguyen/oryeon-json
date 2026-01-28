@@ -2,6 +2,7 @@ import sys, json, re, ssl, socket, whoisit, subprocess, base64
 import tldextract
 import dns.resolver
 import dns.name
+import geoip2.database
 from urllib.parse import urlparse
 from ipwhois import IPWhois
 from datetime import datetime
@@ -114,8 +115,32 @@ def _get_ip_data(ip: str, record: str) -> dict:
     ip_data_dict['from_record'] = record
     # TODO: remarks
     ip_data_dict['rdap'] = _get_ip_data_rdap(ip)
-    # TODO: asn
-    # TODO: geo
+
+    with geoip2.database.Reader('./GeoLite2-ASN.mmdb') as reader:
+        response = reader.asn(ip)
+        asn = {}
+        asn['asn'] = response.autonomous_system_number
+        asn['as_org'] = response.autonomous_system_organization
+        network = str(response.network)
+        asn['network_address'] = network[:network.index('/')]
+        asn['prefix_len'] = network[network.index('/') + 1:]
+        ip_data_dict['asn'] = asn
+
+    with geoip2.database.Reader('./GeoLite2-City.mmdb') as reader:
+        response = reader.city(ip)
+        geo = {}
+        geo['country'] = response.registered_country.names['en']
+        geo['country_code'] = response.registered_country.iso_code
+        geo['region'] = response.subdivisions.most_specific.names.get('en')
+        geo['region_code'] = response.subdivisions.most_specific.iso_code
+        geo['city'] = response.city.name
+        geo['postal_code'] = response.postal.code
+        geo['latitude'] = response.location.latitude
+        geo['longitude'] = response.location.longitude
+        geo['timezone'] = response.location.time_zone
+        geo['isp'] = None
+        geo['org'] = None
+        ip_data_dict['geo'] = geo
 
     return ip_data_dict
 

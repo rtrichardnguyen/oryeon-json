@@ -4,3 +4,4 @@ whoisit
 ipwhois
 cryptography
 tldextract
+geoip2
