@@ -1,14 +1,29 @@
+from __future__ import annotations
+
 import sys, json, re, ssl, socket, whoisit, subprocess, base64
 import tldextract
 import dns.resolver
+import dns.flags
 import dns.name
 import geoip2.database
 from urllib.parse import urlparse
 from ipwhois import IPWhois
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
+
+
+from typing import Dict, Optional, Tuple
+
+import dns.name
+import dns.message
+import dns.query
+import dns.rdatatype
+import dns.rdataclass
+import dns.resolver
+import dns.dnssec
+import dns.exception
 
 DNS_RECORDS = ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'TXT', 'SOA']
 
@@ -35,9 +50,150 @@ SRC_RECURSIVE = 1
 SRC_NOT_FOUND = 2
 
 DNSSEC_NO_RRSIG = 0
-DNSSEC_OK_LOCAL = 1          # "RRSIG present" (presence-based)
-DNSSEC_BAD_SIG = 2           # we won't reliably detect this without full validation
+DNSSEC_OK = 1          # "RRSIG present" (presence-based)
+DNSSEC_BAD = 2           # we won't reliably detect this without full validation
 DNSSEC_NO_DNSKEY = 3
+
+RR_TYPES = ["A", "AAAA", "CNAME", "MX", "NS", "SOA", "TXT", "NAPTR"]
+
+
+def _find_zone_via_soa(res: dns.resolver.Resolver, qname: str) -> Optional[str]:
+    """
+    Walk up labels until we find an SOA; that's the zone apex for our purposes.
+    """
+    name = dns.name.from_text(qname)
+    while True:
+        try:
+            _ = res.resolve(name, "SOA")  # SOA lookup doesn't require DNSSEC
+            return str(name).rstrip(".")
+        except dns.resolver.NXDOMAIN:
+            return None
+        except dns.resolver.NoAnswer:
+            pass
+        except dns.resolver.NoNameservers:
+            pass
+
+        if name == dns.name.root:
+            return None
+        name = name.parent()
+
+
+def _resolve_with_dnssec(
+    res: dns.resolver.Resolver, qname: str, rdtype: str
+) -> Tuple[Optional[dns.rrset.RRset], Optional[dns.rrset.RRset], Optional[dns.message.Message]]:
+    """
+    Returns (rrset, rrsig_rrset, full_response) using want_dnssec=True.
+    """
+    try:
+        ans = res.resolve(qname, rdtype, raise_on_no_answer=False)
+        resp = ans.response  # dns.message.Message
+
+        rrset = None if ans.rrset is None else ans.rrset
+
+        rrsig = None
+        if rrset is not None:
+            # RRSIGs sit in the ANSWER section; find the one that covers rdtype
+            try:
+                rrsig = resp.find_rrset(
+                    resp.answer,
+                    dns.name.from_text(qname),
+                    dns.rdataclass.IN,
+                    dns.rdatatype.RRSIG,
+                    covers=dns.rdatatype.from_text(rdtype),
+                )
+            except KeyError:
+                rrsig = None
+
+        return rrset, rrsig, resp
+    except (dns.resolver.NXDOMAIN, dns.resolver.NoNameservers, dns.exception.Timeout):
+        return None, None, None
+
+
+def _fetch_dnskey(
+    res: dns.resolver.Resolver, zone: str
+) -> Tuple[Optional[dns.rrset.RRset], Optional[dns.rrset.RRset]]:
+    """
+    Returns (dnskey_rrset, dnskey_rrsig_rrset) for the zone apex.
+    """
+    rrset, rrsig, _ = _resolve_with_dnssec(res, zone, "DNSKEY")
+    return rrset, rrsig
+
+
+def _make_key_dict(zone: str, dnskey_rrset: dns.rrset.RRset) -> Dict[dns.name.Name, dns.rrset.RRset]:
+    """
+    dnspython wants {name: dnskey_rrset} mapping.
+    """
+    return {dns.name.from_text(zone): dnskey_rrset}
+
+
+def _validate_rrset(zone: str, rrset: dns.rrset.RRset, rrsig: dns.rrset.RRset, dnskey_rrset: dns.rrset.RRset) -> bool:
+    keys = _make_key_dict(zone, dnskey_rrset)
+    # raises dns.dnssec.ValidationFailure if bad
+    dns.dnssec.validate(rrset, rrsig, keys)
+    return True
+
+
+def build_dnssec_section(domain: str, nameserver: Optional[str] = None) -> Dict:
+    """
+    Produces:
+      {
+        "dnssec": { "A": int, ... },
+        "remarks": { "has_dnskey": bool, "zone_dnskey_selfsign_ok": bool, "zone": str|None }
+      }
+    """
+    res = dns.resolver.Resolver(configure=True)
+    res.use_edns(edns=True, ednsflags=dns.flags.DO)
+    res.lifetime = 5.0
+    res.timeout = 2.0
+    if nameserver:
+        res.nameservers = [nameserver]
+
+    zone = _find_zone_via_soa(res, domain)
+
+    out_dnssec: Dict[str, int] = {t: DNSSEC_NO_DNSKEY for t in RR_TYPES}
+    remarks = {"has_dnskey": False, "zone_dnskey_selfsign_ok": False, "zone": zone if zone else domain}
+
+    if not zone:
+        # can't determine zone -> treat as no DNSKEY
+        return {"dnssec": out_dnssec, "remarks": remarks}
+
+    dnskey_rrset, dnskey_rrsig = _fetch_dnskey(res, zone)
+    if dnskey_rrset is None:
+        # No DNSKEY => enum 3 everywhere (matches your sample when has_dnskey=false)【:contentReference[oaicite:2]{index=2}】
+        return {"dnssec": out_dnssec, "remarks": remarks}
+
+    remarks["has_dnskey"] = True
+
+    # "selfsign" check: validate DNSKEY RRset with its own RRSIG using the DNSKEYs themselves.
+    if dnskey_rrsig is not None:
+        try:
+            _validate_rrset(zone, dnskey_rrset, dnskey_rrsig, dnskey_rrset)
+            remarks["zone_dnskey_selfsign_ok"] = True
+        except dns.dnssec.ValidationFailure:
+            remarks["zone_dnskey_selfsign_ok"] = False
+
+    # For each RRtype: check RRSIG exists and validate
+    for t in RR_TYPES:
+        rrset, rrsig, _ = _resolve_with_dnssec(res, domain, t)
+        if rrset is None:
+            # You can pick any convention for "not found".
+            # Your schema doesn't define a DNSSEC enum for "record absent";
+            # most pipelines still set DNSSEC to 0/3 depending on DNSKEY presence.
+            out_dnssec[t] = DNSSEC_OK if remarks["has_dnskey"] else DNSSEC_NO_DNSKEY
+            continue
+
+        if rrsig is None:
+            out_dnssec[t] = DNSSEC_NO_RRSIG
+            continue
+
+        try:
+            _validate_rrset(zone, rrset, rrsig, dnskey_rrset)
+            out_dnssec[t] = DNSSEC_OK
+        except dns.dnssec.ValidationFailure:
+            out_dnssec[t] = DNSSEC_BAD
+
+    return {"dnssec": out_dnssec, "remarks": remarks}
+
 
 def _resolve_ips(domain: str) -> list[dict]:
     
@@ -298,6 +454,11 @@ def main():
         result_json['dns']['zone_SOA'] = None
 
     # TODO: dnssec
+
+    sec = build_dnssec_section(domain)
+    result_json['dns']['dnssec'] = sec['dnssec']
+    result_json['dns']['remarks'] = sec['remarks']
+
     # TODO: ttls
     # TODO: remarks
 
@@ -364,7 +525,9 @@ def main():
     remarks = {}
     remarks['has_dnskey'] = has_dnskey
 
-    result_json['dns']['remarks'] = remarks
+    # result_json['dns']['remarks'] = remarks
+
+    result_json['dns']['evaluated_on'] = { '$date': datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")}
 
     # TODO: sources
     # TODO: ttls
