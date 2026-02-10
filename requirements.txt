@@ -1,6 +1,7 @@
 urllib3
 dnspython
 whoisit
+python-whois
 ipwhois
 cryptography
 tldextract
