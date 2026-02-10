@@ -29,6 +29,7 @@ COPY app.py ${LAMBDA_TASK_ROOT}/app.py
 COPY requirements.txt ${LAMBDA_TASK_ROOT}/requirements.txt
 COPY GeoLite2-ASN.mmdb ${LAMBDA_TASK_ROOT}/GeoLite2-ASN.mmdb
 COPY GeoLite2-City.mmdb ${LAMBDA_TASK_ROOT}/GeoLite2-City.mmdb
+COPY encoders/ ${LAMBDA_TASK_ROOT}/encoders/
 
 # Install python deps if you have any
 RUN pip install -r ${LAMBDA_TASK_ROOT}/requirements.txt -t ${LAMBDA_TASK_ROOT} || true
