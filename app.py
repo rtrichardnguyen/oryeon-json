@@ -826,15 +826,15 @@ def lambda_handler(event, context):
  
 
     """ EPILOGUE """
-    with open('output.json', 'w') as f:
-        json.dump([result_json], f, indent=4, default=_encode)
+    #with open('output.json', 'w') as f:
+    #    json.dump([result_json], f, indent=4, default=_encode)
 
 
     """ AWS STUFF """
     # Get AWS URL from environment variable
     aws_url = os.getenv('AWS_URL')
     # Get the sample JSON path
-    sample_path = "./data/Feb2/output1.json"
+    sample_path = "./data/Feb2/output.json"
     # Get the encoders prefix path
     encoders_prefix = "./encoders/Jan27"
 
@@ -843,10 +843,10 @@ def lambda_handler(event, context):
     # ===============================
 
     # Read data from sample JSON to see the features extracted
-    sample_records = []
-    with open(sample_path, 'r', encoding='utf-8') as file:
-        for item in ijson.items(file, 'item'):
-            sample_records.append(extract_features(item))
+    sample_records = [extract_features(result_json)]
+    #with open(sample_path, 'r', encoding='utf-8') as file:
+    #    for item in ijson.items(file, 'item'):
+    #        sample_records.append(extract_features(item))
 
     input = pd.json_normalize(sample_records)
 

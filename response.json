@@ -1,1 +1,1 @@
-{"errorMessage": "'body'", "errorType": "KeyError", "requestId": "2515ad1e-9936-44be-851f-86cabafdd5c0", "stackTrace": ["  File \"/var/task/app.py\", line 582, in lambda_handler\n    url = event['body']\n"]}
+{"errorMessage": "[Errno 30] Read-only file system: 'output.json'", "errorType": "OSError", "requestId": "d513c990-ffea-4ef4-be42-7c6bdf208173", "stackTrace": ["  File \"/var/task/app.py\", line 829, in lambda_handler\n    with open('output.json', 'w') as f:\n"]}
