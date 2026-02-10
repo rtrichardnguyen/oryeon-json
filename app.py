@@ -574,7 +574,7 @@ def extract_features(record):
 # Keyword hunting in all tls certificate SANs (san_has_security_keywords)
 # If registrant country is different from IP geo country (geo_mismatch)
 
-def handler(event, context):
+def lambda_handler(event, context):
 
     if len(sys.argv)!= 2:
         raise ValueError('Incorrect number of arguments was given.')

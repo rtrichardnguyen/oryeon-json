@@ -17,7 +17,7 @@ RUN chmod +x /tmp/zgrab2
 
 
 # ---------- Stage 2: Lambda runtime ----------
-FROM public.ecr.aws/lambda/python:3.11
+FROM public.ecr.aws/lambda/python:3.10
 
 # Put zgrab2 on PATH
 COPY --from=build-zgrab2 /tmp/zgrab2 /opt/bin/zgrab2
@@ -32,7 +32,7 @@ COPY GeoLite2-City.mmdb ${LAMBDA_TASK_ROOT}/GeoLite2-City.mmdb
 COPY encoders/ ${LAMBDA_TASK_ROOT}/encoders/
 
 # Install python deps if you have any
-RUN pip install -r ${LAMBDA_TASK_ROOT}/requirements.txt -t ${LAMBDA_TASK_ROOT} || true
+RUN pip install -r ${LAMBDA_TASK_ROOT}/requirements.txt -t ${LAMBDA_TASK_ROOT}
 
 # Handler
 CMD ["app.lambda_handler"]

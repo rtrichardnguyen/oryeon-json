@@ -13,3 +13,4 @@ joblib
 scikit-learn
 requests
 boto3
+cffi>=1.16.0
