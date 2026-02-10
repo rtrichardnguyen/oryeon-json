@@ -25,6 +25,29 @@ import dns.resolver
 import dns.dnssec
 import dns.exception
 
+# ===============================
+# 1. Setup
+# ===============================
+# Block 1
+import os
+from dotenv import load_dotenv
+# Load environment variables from .env file
+load_dotenv()
+# Block 2
+import math as mt
+from datetime import datetime, timezone, timedelta
+# Block 3
+import ijson
+import pandas as pd
+# Block 4
+import joblib
+from sklearn.preprocessing import LabelEncoder, TargetEncoder
+# Block 5
+import requests
+
+from decimal import Decimal
+import boto3
+
 DNS_RECORDS = ['A', 'AAAA', 'CNAME', 'MX', 'NS', 'TXT', 'SOA']
 
 SOA_RE = re.compile(
@@ -337,7 +360,221 @@ def _get_cert_exts(cert_raw_b64):
         })
     return exts
 
-def main():
+# ===============================
+# 2. Feature Engineering - AI Assisted
+# ===============================
+
+# Function to extract the selected 
+# Current: 35
+# features from the dataset into a dictionary
+def extract_features(record):
+    features = {}
+
+    # Get our label (phishing or unknown)
+    features["label"] = record.get("category") or ""
+
+    # --- Domain Features ---
+    domain = record.get("domain_name") or ""
+    # domain_name
+    features["domain_name"] = domain
+    # domain_length (phishing domains often have long/random names)
+    features["domain_length"] = len(domain)
+    # domain_numDigits (phishing domains often have digits to mimic legit names)
+    features["domain_numDigits"] = sum(c.isdigit() for c in domain)
+    # domain_entropy (randomized character distribution)
+    features["domain_entropy"] = -sum(
+        (domain.count(c)/len(domain)) * mt.log2(domain.count(c)/len(domain))
+        for c in set(domain)
+    ) if domain else 0
+
+    def to_ts(date_obj):
+        try:
+            if isinstance(date_obj, dict) and "$date" in date_obj:
+                return datetime.fromisoformat(date_obj["$date"].replace("+00:00", "")).timestamp()
+        except Exception:
+            return None
+        return None
+
+    # --- RDAP Features ---
+    rdap = record.get("rdap") or {}
+    # registration_date (recently registered domains are suspicious)
+    features["rdap_registration_ts"] = to_ts(rdap.get("registration_date"))
+    # expiration_date (short validity is suspicious)
+    features["rdap_expiration_ts"] = to_ts(rdap.get("expiration_date"))
+    # registrar name (cheap registrars are more common in phishing)
+    entities = rdap.get("entities") or {}
+    registrars = entities.get("registrar") or [{}]
+    features["rdap_registrar"] = registrars[0].get("name", "")
+    # TODO: add today's date for empirical data
+    # evaluated_on (timestamp when data was evaluated)
+    evaluated_on = record.get("evaluated_on") or {}
+    eval_ts = to_ts(evaluated_on)
+
+    # --- Derived RDAP Features ---
+    reg_ts = features["rdap_registration_ts"]
+    exp_ts = features["rdap_expiration_ts"]
+    last_changed_ts = to_ts(rdap.get("last_changed_date"))
+    # rdap_domainAge (group age since domain registration)
+    if eval_ts and reg_ts:
+        days = (eval_ts - reg_ts) / 86400
+        # Week
+        if days <= 7:
+            features["rdap_domainAge"] = 1
+        # Month
+        elif days <= 30:
+            features["rdap_domainAge"] = 2
+        # Year
+        elif days <= 365:
+            features["rdap_domainAge"] = 3
+        # Older
+        else:
+            features["rdap_domainAge"] = 4
+    else:
+        features["rdap_domainAge"] = None
+    # rdap_timeToExpiry (group time until domain’s registration expires)
+    if eval_ts and exp_ts:
+        features["rdap_timeToExpiry"] = (exp_ts - eval_ts) / 86400
+        # Week
+        if days <= 7:
+            features["rdap_timeToExpiry"] = 1
+        # Month
+        elif days <= 30:
+            features["rdap_timeToExpiry"] = 2
+        # Year
+        elif days <= 365:
+            features["rdap_timeToExpiry"] = 3
+        # More
+        else:
+            features["rdap_timeToExpiry"] = 4
+    else:
+        features["rdap_timeToExpiry"] = None
+    # rdap_recentUpdate_flag (True if updated within 6 months)
+    if eval_ts and last_changed_ts:
+        features["rdap_recentUpdate_flag"] = (eval_ts - last_changed_ts) <= 180 * 86400
+    else:
+        features["rdap_recentUpdate_flag"] = False
+    # rdap_status_clientHold_flag (True if domain is on hold)
+    status_list = rdap.get("status", [])
+    features["rdap_status_clientHold_flag"] = any(
+        "clientHold" in s or "serverHold" in s for s in status_list
+    )
+
+    # --- DNS Features ---
+    dns = record.get("dns") or {}
+    # A_count (number of IPv4 addresses)
+    features["dns_A_count"] = len(dns.get("A") or [])
+    # AAAA_count (number of IPv6 addresses)
+    features["dns_AAAA_count"] = len(dns.get("AAAA") or [])
+    # MX presence (phishing often lacks mail servers)
+    features["dns_MX_count"] = len(dns.get("MX") or {}) 
+    # TXT presence (legit domains often have SPF/DKIM records)
+    features["dns_TXT_count"] = len(dns.get("TXT") or [])
+    # CNAME presence
+    features["dns_has_CNAME"] = dns.get("CNAME") is not None
+    # DNSSEC presence (phishing often lacks DNSSEC)
+    features["dnssec_present"] = dns.get("DNSSEC") is not None
+    # has_dnskey (security flag, often false for phishing)
+    remarks = dns.get("remarks") or {}
+    features["dnssec_has_dnskey"] = remarks.get("has_dnskey", False)
+
+    soa = dns.get("SOA") or {}
+    # refresh (unusually low refresh can be suspicious)
+    features["dns_soa_refresh"] = soa.get("refresh", 0)
+    # retry (no comments yet)
+    features["dns_soa_retry"] = soa.get("retry", 0)
+    # expire (no comments yet)
+    features["dns_soa_expire"] = soa.get("expire", 0)
+    # dns_NS_count (number of NS records)
+    features["dns_NS_count"] = len(dns.get("NS") or {}) 
+    # dns_contains_SPF_flag (True if TXT contains SPF policy)
+    txt_records = dns.get("TXT") or []
+    if isinstance(txt_records, list):
+        features["dns_contains_SPF_flag"] = any(
+            isinstance(txt, str) and "v=spf1" in txt.lower() for txt in txt_records
+        )
+    else:
+        features["dns_contains_SPF_flag"] = False
+    # TODO: missing; dns_min_TTL (minimum DNS TTL value)
+    ttls = dns.get("ttls") or {}
+    features["dns_min_TTL"] = min(ttls.values()) if ttls else 0
+
+    # mismatch_ns_rdap_flag (True if NS from DNS differs from RDAP)
+    rdap_ns = set([ns.lower() for ns in rdap.get("nameservers", [])])
+    dns_ns = set([ns.lower() for ns in (dns.get("NS") or {}).keys()])
+    features["mismatch_ns_rdap_flag"] = bool(rdap_ns and dns_ns and not (rdap_ns & dns_ns))
+
+    # --- IP data / Hosting example Features ---
+    ip_data = record.get("ip_data") or []
+    if ip_data:
+        asns = [i.get("asn", {}).get("as_org", "") for i in ip_data if i.get("asn")]
+        countries = [i.get("geo", {}).get("country", "") for i in ip_data if i.get("geo")]
+
+        # distinct_ASN_count (phishing often uses diverse/shady ASNs)
+        features["distinct_asn_count"] = len(set(asns))
+        # distinct_country_count (phishing often mismatches claimed region)
+        features["distinct_country_count"] = len(set(countries))
+
+        first_ip = ip_data[0] or {}
+        # asn and geo from first IP
+        asn = first_ip.get("asn") or {}
+        geo = first_ip.get("geo") or {}
+        # first_ip_asn (check for hosting ASN, e.g., Cloudflare vs shady ISPs)
+        features["asn_org"] = asn.get("as_org", "")
+        # TODO: known_asn (boolean features for known good ASNs)
+        # first_ip_geo_country (check for hosting country)
+        features["geo_country"] = geo.get("country", "")
+
+    else:
+        features["distinct_asn_count"] = 0
+        features["distinct_country_count"] = 0
+        features["asn_org"] = ""
+        features["geo_country"] = ""
+
+    # --- TLS Features ---
+    tls = record.get("tls") or {}
+    # protocol (e.g., TLSv1.3 is common)
+    features["tls_protocol"] = tls.get("protocol", "")
+    certs = tls.get("certificates") or []
+    features["cert_chain_length"] = len(certs)
+
+    if certs:
+        # Aggregated Validity: Get the shortest validity in the whole chain
+        valid_lengths = [c.get("valid_len", 0) for c in certs if c.get("valid_len")]
+        # valid_len (short cert validity = suspicious)
+        features["tls_min_cert_valid_len"] = min(valid_lengths) if valid_lengths else 0
+        
+        # Check for Self-Signed (Leaf is Root)
+        features["is_self_signed"] = certs[0].get("common_name") == certs[-1].get("common_name")
+
+        # Get leaf certificate details
+        cert = certs[0] or {}
+        # organization (e.g., Let’s Encrypt vs premium CAs)
+        features["tls_cert_org"] = cert.get("organization", "")
+        # san_count (multiple wildcards, SANs can indicate phishing)
+        san_exts = [
+            ext for ext in cert.get("extensions") or []
+            if ext.get("name") == "subjectAltName"
+        ]
+
+        if san_exts:
+            features["tls_san_count"] = len(san_exts[0].get("value", "").split(","))
+        else:
+            features["tls_san_count"] = 0
+        # is_root (whether cert chain is valid/trusted)
+        features["tls_cert_is_root"] = cert.get("is_root", False)
+    else:
+        features["is_self_signed"] = True
+        features["tls_min_cert_valid_len"] = 0
+        features["tls_cert_org"] = ""
+        features["tls_san_count"] = 0
+        features["tls_cert_is_root"] = False
+    return features
+
+# Advance future features 
+# Keyword hunting in all tls certificate SANs (san_has_security_keywords)
+# If registrant country is different from IP geo country (geo_mismatch)
+
+def handler(event, context):
 
     if len(sys.argv)!= 2:
         raise ValueError('Incorrect number of arguments was given.')
@@ -345,7 +582,8 @@ def main():
 
     result_json = {}
 
-    url = sys.argv[1]
+    # url = sys.argv[1]
+    url = event['body']
     parsed_url = urlparse(url)
     domain = parsed_url.netloc
     ext = tldextract.extract(parsed_url.hostname)
@@ -596,5 +834,95 @@ def main():
         json.dump([result_json], f, indent=4, default=_encode)
 
 
-if __name__ == "__main__":
-    main()
+    """ AWS STUFF """
+    # Get AWS URL from environment variable
+    aws_url = os.getenv('AWS_URL')
+    # Get the sample JSON path
+    sample_path = "./data/Feb2/output1.json"
+    # Get the encoders prefix path
+    encoders_prefix = "./encoders/Jan27"
+
+    # ===============================
+    # 3. Read data + Apply feature extraction
+    # ===============================
+
+    # Read data from sample JSON to see the features extracted
+    sample_records = []
+    with open(sample_path, 'r', encoding='utf-8') as file:
+        for item in ijson.items(file, 'item'):
+            sample_records.append(extract_features(item))
+
+    input = pd.json_normalize(sample_records)
+
+    X_target_encoders = joblib.load(f"{encoders_prefix}/target_encoders.joblib")
+    X_label_encoders = joblib.load(f"{encoders_prefix}/label_encoders.joblib")
+
+    def apply_target_encoders(X_new, encoders):
+        X_new = X_new.copy()
+
+        for col, encoder in encoders.items():
+            X_new[col] = X_new[col].astype("category")
+            X_new[col] = encoder.transform(X_new[[col]])
+
+        return X_new
+
+    def apply_label_encoders(X_new, encoders):
+        X_new = X_new.copy()
+
+        for col, encoder in encoders.items():
+            X_new[col] = encoder.transform(X_new[col].astype(str))
+
+        return X_new
+
+    input_encoded = apply_target_encoders(input, X_target_encoders)
+    input_encoded = apply_label_encoders(input_encoded, X_label_encoders)
+
+    # Convert input_encoded DataFrame to comma-separated string
+    # Taking the first row and converting to CSV format
+    input_string = ",".join(input_encoded.iloc[0].astype(str).values)
+
+    # Format the output: drop first two data points and replace None with empty string
+    input_list = input_string.split(',')
+    # Drop first two elements
+    input_list = input_list[2:]
+    # Replace 'None' with empty string
+    input_list = ['' if val == 'None' else val for val in input_list]
+    # Rejoin as comma-separated string
+    input_string = ",".join(input_list)
+
+    # ===============================
+    # 5. Send data to API
+    # ===============================
+
+    # Define the JSON data to be sent
+    # Example: 13,2,3.180832987205441,1057795969.0,1720570369.0,0.691244836372824,7469.716872962962,201.2831270370384,0,0,1,0,0,0,0,0,0,0,0,0,0,0,1,1,1.0,0.9233829790536662,0,0.9784475747064278,31535999,2,0
+    json_data = {
+        "input": input_string
+    }
+
+    # Send the JSON data to the API
+    response = requests.post(aws_url, json=json_data)
+
+    # Print the response from the API
+    # 1 is safe, 0 is phishing
+    print(response.status_code)
+    result = response.json()
+
+    dynamodb = boto3.resource("dynamodb")
+    table = dynamodb.Table("Url-Reputation")
+
+    def store_url_reputation(url: str, confidence_score: float):
+        table.put_item(
+            Item={
+                "url": url,
+                "confidence_score": Decimal(str(confidence_score))
+            }
+        )
+
+    store_url_reputation(
+        url=url,
+        confidence_score=result['prediction']
+    )
+
+#if __name__ == "__main__":
+#    main()

@@ -5,3 +5,10 @@ ipwhois
 cryptography
 tldextract
 geoip2
+python-dotenv
+ijson
+pandas
+joblib
+scikit-learn
+requests
+boto3
