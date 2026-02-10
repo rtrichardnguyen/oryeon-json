@@ -836,7 +836,7 @@ def lambda_handler(event, context):
     # Get the sample JSON path
     sample_path = "./data/Feb2/output.json"
     # Get the encoders prefix path
-    encoders_prefix = "./encoders/Jan27"
+    encoders_prefix = "./encoders"
 
     # ===============================
     # 3. Read data + Apply feature extraction
