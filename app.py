@@ -911,7 +911,7 @@ def lambda_handler(event, context):
         table.put_item(
             Item={
                 "url": url,
-                "confidence_score": Decimal(str(confidence_score))
+                "score": Decimal(str(confidence_score))
             }
         )
 
