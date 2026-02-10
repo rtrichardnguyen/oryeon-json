@@ -576,12 +576,8 @@ def extract_features(record):
 
 def lambda_handler(event, context):
 
-    if len(sys.argv)!= 2:
-        raise ValueError('Incorrect number of arguments was given.')
-
-
     result_json = {}
-
+    print("EVENT JSON:", json.dumps(event, default=str)[:10000])
     # url = sys.argv[1]
     url = event['body']
     parsed_url = urlparse(url)
