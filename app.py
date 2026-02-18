@@ -923,6 +923,7 @@ def lambda_handler(event, context):
         url=url,
         confidence_score=result['prediction']
     )
+    print('RESULT:', result['prediction'])
 
 # if __name__ == "__main__":
 #     main()
