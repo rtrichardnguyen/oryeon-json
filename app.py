@@ -574,7 +574,7 @@ def extract_features(record):
 # Keyword hunting in all tls certificate SANs (san_has_security_keywords)
 # If registrant country is different from IP geo country (geo_mismatch)
 
-def main():
+def lambda_handler(event, context):
 
     result_json = {}
     # url = sys.argv[1]
