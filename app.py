@@ -574,12 +574,12 @@ def extract_features(record):
 # Keyword hunting in all tls certificate SANs (san_has_security_keywords)
 # If registrant country is different from IP geo country (geo_mismatch)
 
-def lambda_handler(event, context):
+def main():
 
     result_json = {}
-    print("EVENT JSON:", json.dumps(event, default=str)[:10000])
     # url = sys.argv[1]
     url = event['body']
+    # url = 'https://conflrma57843.com/u6383644457'
     parsed_url = urlparse(url)
     domain = parsed_url.netloc
     ext = tldextract.extract(parsed_url.hostname)
@@ -784,6 +784,10 @@ def lambda_handler(event, context):
         shell=True
     )
 
+    print("zgrab2 rc:", proc.returncode)
+    print("zgrab2 stderr:", proc.stder.ddecode(errors="replace")[:2000])
+    print("zgrab2 stdout:", proc.stdout.ddecode(errors="replace")[:2000])
+
     handshake_data = proc.stdout
 
     try:
@@ -920,5 +924,5 @@ def lambda_handler(event, context):
         confidence_score=result['prediction']
     )
 
-#if __name__ == "__main__":
-#    main()
+# if __name__ == "__main__":
+#     main()
