@@ -1,0 +1,7 @@
+venv/
+build/
+deployment.zip
+.git/
+__pycache__/
+*.pyc
+*.pyo

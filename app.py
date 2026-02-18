@@ -63,7 +63,7 @@ SOA_RE = re.compile(
 )
 
 ROOT = Path(__file__).resolve().parents[0]
-ZGRAB2 = ROOT / 'tools' / 'zgrab2' / 'zgrab2'
+ZGRAB2 = '/opt/bin/zgrab2'
 
 RR_TYPES = ["A", "AAAA", "SOA", "CNAME", "MX", "NS", "TXT", "NAPTR"]
 
@@ -778,15 +778,15 @@ def lambda_handler(event, context):
     """ TLS DATA """
 
     proc = subprocess.run(
-        [f'echo {domain} | {str(ZGRAB2)} http --max-redirects=1 --endpoint="{url.split(domain, 1)[1]}"', 'http', '--help'],
+        f'echo {domain} | {ZGRAB2} http --max-redirects=1 --endpoint="{url.split(domain, 1)[1]}"',
         capture_output=True,
         text=True,
         shell=True
     )
 
     print("zgrab2 rc:", proc.returncode)
-    print("zgrab2 stderr:", proc.stder.ddecode(errors="replace")[:2000])
-    print("zgrab2 stdout:", proc.stdout.ddecode(errors="replace")[:2000])
+    print("zgrab2 stderr:", proc.stderr[:2000])
+    print("zgrab2 stdout:", proc.stdout[:2000])
 
     handshake_data = proc.stdout
 
@@ -870,7 +870,10 @@ def lambda_handler(event, context):
         X_new = X_new.copy()
 
         for col, encoder in encoders.items():
-            X_new[col] = encoder.transform(X_new[col].astype(str))
+            col_values = X_new[col].astype(str)
+            known = set(encoder.classes_)
+            col_values = col_values.map(lambda x, k=known: x if x in k else 'nan')
+            X_new[col] = encoder.transform(col_values)
 
         return X_new
 
