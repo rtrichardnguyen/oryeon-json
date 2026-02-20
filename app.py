@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import sys, json, re, ssl, socket, whoisit, subprocess, base64
+import sys, json, re, ssl, socket, whoisit, subprocess, base64, os
 import tldextract
 import dns.resolver
 import dns.flags
@@ -776,12 +776,19 @@ def lambda_handler(event, context):
     result_json['rdap']['expiration_date'] = { '$date': result_json['rdap']['expiration_date'] }
  
     """ TLS DATA """
+    os.makedirs("/tmp/.config/zgrab2", exist_ok=True)
+    with open("/tmp/.config/zgrab2/blocklist.conf", "w") as f:
+        f.write("")
+
+    env = os.environ.copy()
+    env["HOME"] = "/tmp"
 
     proc = subprocess.run(
         f'echo {domain} | {ZGRAB2} http --max-redirects=1 --endpoint="{url.split(domain, 1)[1]}"',
         capture_output=True,
         text=True,
-        shell=True
+        shell=True,
+        env=env,
     )
 
     print("zgrab2 rc:", proc.returncode)
